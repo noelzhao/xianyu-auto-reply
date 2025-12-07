@@ -3499,33 +3499,33 @@ class XianyuLive:
                     config_data = self._parse_notification_config(channel_config)
                     logger.info(f"📱 解析后的配置数据: {config_data}")
 
-                    match channel_type:
-                        case 'qq':
-                            logger.info(f"📱 开始发送QQ通知...")
-                            await self._send_qq_notification(config_data, notification_msg)
-                        case 'ding_talk' | 'dingtalk':
-                            logger.info(f"📱 开始发送钉钉通知...")
-                            await self._send_dingtalk_notification(config_data, notification_msg)
-                        case 'feishu' | 'lark':
-                            logger.info(f"📱 开始发送飞书通知...")
-                            await self._send_feishu_notification(config_data, notification_msg)
-                        case 'bark':
-                            logger.info(f"📱 开始发送Bark通知...")
-                            await self._send_bark_notification(config_data, notification_msg)
-                        case 'email':
-                            logger.info(f"📱 开始发送邮件通知...")
-                            await self._send_email_notification(config_data, notification_msg)
-                        case 'webhook':
-                            logger.info(f"📱 开始发送Webhook通知...")
-                            await self._send_webhook_notification(config_data, notification_msg)
-                        case 'wechat':
-                            logger.info(f"📱 开始发送微信通知...")
-                            await self._send_wechat_notification(config_data, notification_msg)
-                        case 'telegram':
-                            logger.info(f"📱 开始发送Telegram通知...")
-                            await self._send_telegram_notification(config_data, notification_msg)
-                        case _:
-                            logger.warning(f"📱 不支持的通知渠道类型: {channel_type}")
+                    # match channel_type:
+                    #     case 'qq':
+                    #         logger.info(f"📱 开始发送QQ通知...")
+                    #         await self._send_qq_notification(config_data, notification_msg)
+                    #     case 'ding_talk' | 'dingtalk':
+                    #         logger.info(f"📱 开始发送钉钉通知...")
+                    #         await self._send_dingtalk_notification(config_data, notification_msg)
+                    #     case 'feishu' | 'lark':
+                    #         logger.info(f"📱 开始发送飞书通知...")
+                    #         await self._send_feishu_notification(config_data, notification_msg)
+                    #     case 'bark':
+                    #         logger.info(f"📱 开始发送Bark通知...")
+                    #         await self._send_bark_notification(config_data, notification_msg)
+                    #     case 'email':
+                    #         logger.info(f"📱 开始发送邮件通知...")
+                    #         await self._send_email_notification(config_data, notification_msg)
+                    #     case 'webhook':
+                    #         logger.info(f"📱 开始发送Webhook通知...")
+                    #         await self._send_webhook_notification(config_data, notification_msg)
+                    #     case 'wechat':
+                    #         logger.info(f"📱 开始发送微信通知...")
+                    #         await self._send_wechat_notification(config_data, notification_msg)
+                    #     case 'telegram':
+                    #         logger.info(f"📱 开始发送Telegram通知...")
+                    #         await self._send_telegram_notification(config_data, notification_msg)
+                    #     case _:
+                    #         logger.warning(f"📱 不支持的通知渠道类型: {channel_type}")
 
                 except Exception as notify_error:
                     logger.error(f"📱 发送通知失败 ({notification.get('channel_name', 'Unknown')}): {self._safe_str(notify_error)}")
@@ -4128,34 +4128,34 @@ class XianyuLive:
                     # 解析配置数据
                     config_data = self._parse_notification_config(channel_config)
 
-                    match channel_type:
-                        case 'qq':
-                            await self._send_qq_notification(config_data, notification_msg)
-                            notification_sent = True
-                        case 'ding_talk' | 'dingtalk':
-                            await self._send_dingtalk_notification(config_data, notification_msg)
-                            notification_sent = True
-                        case 'feishu' | 'lark':
-                            await self._send_feishu_notification(config_data, notification_msg)
-                            notification_sent = True
-                        case 'bark':
-                            await self._send_bark_notification(config_data, notification_msg)
-                            notification_sent = True
-                        case 'email':
-                            # 邮件支持附件
-                            await self._send_email_notification(config_data, notification_msg, attachment_path)
-                            notification_sent = True
-                        case 'webhook':
-                            await self._send_webhook_notification(config_data, notification_msg)
-                            notification_sent = True
-                        case 'wechat':
-                            await self._send_wechat_notification(config_data, notification_msg)
-                            notification_sent = True
-                        case 'telegram':
-                            await self._send_telegram_notification(config_data, notification_msg)
-                            notification_sent = True
-                        case _:
-                            logger.warning(f"不支持的通知渠道类型: {channel_type}")
+                    # match channel_type:
+                    #     case 'qq':
+                    #         await self._send_qq_notification(config_data, notification_msg)
+                    #         notification_sent = True
+                    #     case 'ding_talk' | 'dingtalk':
+                    #         await self._send_dingtalk_notification(config_data, notification_msg)
+                    #         notification_sent = True
+                    #     case 'feishu' | 'lark':
+                    #         await self._send_feishu_notification(config_data, notification_msg)
+                    #         notification_sent = True
+                    #     case 'bark':
+                    #         await self._send_bark_notification(config_data, notification_msg)
+                    #         notification_sent = True
+                    #     case 'email':
+                    #         # 邮件支持附件
+                    #         await self._send_email_notification(config_data, notification_msg, attachment_path)
+                    #         notification_sent = True
+                    #     case 'webhook':
+                    #         await self._send_webhook_notification(config_data, notification_msg)
+                    #         notification_sent = True
+                    #     case 'wechat':
+                    #         await self._send_wechat_notification(config_data, notification_msg)
+                    #         notification_sent = True
+                    #     case 'telegram':
+                    #         await self._send_telegram_notification(config_data, notification_msg)
+                    #         notification_sent = True
+                    #     case _:
+                    #         logger.warning(f"不支持的通知渠道类型: {channel_type}")
 
                 except Exception as notify_error:
                     logger.error(f"发送Token刷新通知失败 ({notification.get('channel_name', 'Unknown')}): {self._safe_str(notify_error)}")
@@ -4282,33 +4282,33 @@ class XianyuLive:
                         # 解析配置数据
                         config_data = self._parse_notification_config(channel_config)
 
-                        match channel_type:
-                            case 'qq':
-                                await self._send_qq_notification(config_data, notification_message)
-                                logger.info(f"已发送自动发货通知到QQ")
-                            case 'ding_talk' | 'dingtalk':
-                                await self._send_dingtalk_notification(config_data, notification_message)
-                                logger.info(f"已发送自动发货通知到钉钉")
-                            case 'email':
-                                await self._send_email_notification(config_data, notification_message)
-                                logger.info(f"已发送自动发货通知到邮箱")
-                            case 'webhook':
-                                await self._send_webhook_notification(config_data, notification_message)
-                                logger.info(f"已发送自动发货通知到Webhook")
-                            case 'wechat':
-                                await self._send_wechat_notification(config_data, notification_message)
-                                logger.info(f"已发送自动发货通知到微信")
-                            case 'telegram':
-                                await self._send_telegram_notification(config_data, notification_message)
-                                logger.info(f"已发送自动发货通知到Telegram")
-                            case 'bark':
-                                await self._send_bark_notification(config_data, notification_message)
-                                logger.info(f"已发送自动发货通知到Bark")
-                            case 'feishu' | 'lark':
-                                await self._send_feishu_notification(config_data, notification_message)
-                                logger.info(f"已发送自动发货通知到飞书")
-                            case _:
-                                logger.warning(f"不支持的通知渠道类型: {channel_type}")
+                        # match channel_type:
+                        #     case 'qq':
+                        #         await self._send_qq_notification(config_data, notification_message)
+                        #         logger.info(f"已发送自动发货通知到QQ")
+                        #     case 'ding_talk' | 'dingtalk':
+                        #         await self._send_dingtalk_notification(config_data, notification_message)
+                        #         logger.info(f"已发送自动发货通知到钉钉")
+                        #     case 'email':
+                        #         await self._send_email_notification(config_data, notification_message)
+                        #         logger.info(f"已发送自动发货通知到邮箱")
+                        #     case 'webhook':
+                        #         await self._send_webhook_notification(config_data, notification_message)
+                        #         logger.info(f"已发送自动发货通知到Webhook")
+                        #     case 'wechat':
+                        #         await self._send_wechat_notification(config_data, notification_message)
+                        #         logger.info(f"已发送自动发货通知到微信")
+                        #     case 'telegram':
+                        #         await self._send_telegram_notification(config_data, notification_message)
+                        #         logger.info(f"已发送自动发货通知到Telegram")
+                        #     case 'bark':
+                        #         await self._send_bark_notification(config_data, notification_message)
+                        #         logger.info(f"已发送自动发货通知到Bark")
+                        #     case 'feishu' | 'lark':
+                        #         await self._send_feishu_notification(config_data, notification_message)
+                        #         logger.info(f"已发送自动发货通知到飞书")
+                        #     case _:
+                        #         logger.warning(f"不支持的通知渠道类型: {channel_type}")
 
                     except Exception as notify_error:
                         logger.error(f"发送自动发货通知失败: {self._safe_str(notify_error)}")

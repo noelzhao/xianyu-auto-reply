@@ -407,7 +407,10 @@ class AIReplyEngine:
                 if intent == "price":
                     # self.increment_bargain_count(chat_id, cookie_id) # 此行原先就没有，保持不变
                     pass
-                
+
+                # brandName = reply
+                # kikiResp = self._call_kiki_api()
+
                 logger.info(f"AI回复生成成功 (账号: {cookie_id}): {reply}")
                 return reply
                 
@@ -418,6 +421,54 @@ class AIReplyEngine:
             if hasattr(e, 'request') and hasattr(e.request, 'url'):
                 logger.error(f"请求URL: {e.request.url}")
             return None
+
+    def _call_kiki_api(self, settings: dict, messages: list) -> str:
+        """调用Kiki API"""
+
+        url = f"https://dashscope.aliyuncs.com/api/v1/apps/{app_id}/completion"
+
+        system_content = ""
+        user_content = ""
+        for msg in messages:
+            if msg['role'] == 'system':
+                system_content = msg['content']
+            elif msg['role'] == 'user':
+                user_content = msg['content'] # 假设 user prompt 已在 generate_reply 中构建好
+
+        if system_content and user_content:
+            prompt = f"{system_content}\n\n用户问题：{user_content}\n\n请直接回答用户的问题："
+        elif user_content:
+            prompt = user_content
+        else:
+            prompt = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
+
+        data = {
+            "input": {"prompt": prompt},
+            "parameters": {"max_tokens": max_tokens, "temperature": temperature},
+            "debug": {}
+        }
+        headers = {
+            "Authorization": f"Bearer {settings['api_key']}",
+            "Content-Type": "application/json"
+        }
+
+        logger.info(f"DashScope API请求: {url}")
+        logger.info(f"发送的prompt: {prompt[:100]}...") # 避免 prompt 过长
+        logger.debug(f"请求数据: {json.dumps(data, ensure_ascii=False)}")
+
+        response = requests.post(url, headers=headers, json=data, timeout=30)
+
+        if response.status_code != 200:
+            logger.error(f"DashScope API请求失败: {response.status_code} - {response.text}")
+            raise Exception(f"DashScope API请求失败: {response.status_code} - {response.text}")
+
+        result = response.json()
+        logger.debug(f"DashScope API响应: {json.dumps(result, ensure_ascii=False)}")
+
+        if 'output' in result and 'text' in result['output']:
+            return result['output']['text'].strip()
+        else:
+            raise Exception(f"DashScope API响应格式错误: {result}")
 
     async def generate_reply_async(self, message: str, item_info: dict, chat_id: str,
                                    cookie_id: str, user_id: str, item_id: str,

@@ -340,7 +340,7 @@ git clone https://github.com/zhinianboke/xianyu-auto-reply.git
 cd xianyu-auto-reply
 
 # 2. 创建虚拟环境（推荐）
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate  # Linux/macOS
 # 或 venv\Scripts\activate  # Windows
 
@@ -353,7 +353,7 @@ playwright install chromium
 playwright install-deps chromium  # Linux需要
 
 # 5. 启动系统
-python Start.py
+python3 Start.py
 
 # 6. 访问系统
 # http://localhost:8080
