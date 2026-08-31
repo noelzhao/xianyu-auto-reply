@@ -5,6 +5,8 @@
 FROM python:3.11-slim
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
+ENV PLAYWRIGHT_CHROMIUM_DOWNLOAD_URL=https://npmmirror.com/mirrors/chromium-browser-snapshots/Linux_x64/
 
 # 配置国内镜像源
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \

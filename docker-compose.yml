@@ -5,9 +5,9 @@
 services:
   # ====== 基础设施 ======
 
-  # MySQL数据库（默认从阿里云仓库拉取，可通过 MYSQL_IMAGE 覆盖）
+  # MySQL数据库 - 使用 Docker 官方镜像，不使用作者私有镜像
   mysql:
-    image: ${MYSQL_IMAGE:-registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-mysql:8.0}
+    image: mysql:8.0
     container_name: xianyu-mysql
     restart: unless-stopped
     environment:
@@ -34,9 +34,9 @@ services:
       retries: 10
       start_period: 30s
 
-  # Redis缓存（默认从阿里云仓库拉取，可通过 REDIS_IMAGE 覆盖）
+  # Redis缓存 - 使用 Docker 官方镜像，不使用作者私有镜像
   redis:
-    image: ${REDIS_IMAGE:-registry.cn-shanghai.aliyuncs.com/zhinian-software/xianyu-redis:7-alpine}
+    image: redis:7-alpine
     container_name: xianyu-redis
     restart: unless-stopped
     command: >
@@ -89,20 +89,23 @@ services:
       - STATIC_DIR=/app/static
       - BACKUP_DIR=/app/backups
       - BACKEND_WEB_PUBLIC_URL=${BACKEND_WEB_PUBLIC_URL:-}
-      - CARD_DOCK_BASE_URL=${CARD_DOCK_BASE_URL:-http://backend.zhinianboke.com}
-      - EXTERNAL_API_KEY=${EXTERNAL_API_KEY:-zhinian_bk}
+      - CARD_DOCK_BASE_URL=${CARD_DOCK_BASE_URL:-}
+      - EXTERNAL_API_KEY=${EXTERNAL_API_KEY:-}
       - FRONTEND_PUBLIC_URL=${FRONTEND_PUBLIC_URL:-}
       - AUTO_START_CRAWL_JOBS=${AUTO_START_CRAWL_JOBS:-true}
       - REMOTE_OFFICIAL_BASE_URL=${REMOTE_OFFICIAL_BASE_URL:-https://xy.zhinianboke.com}
-      - ENABLE_REMOTE_ADS=${ENABLE_REMOTE_ADS:-true}
-      - ENABLE_REMOTE_ANNOUNCEMENTS=${ENABLE_REMOTE_ANNOUNCEMENTS:-true}
-      - ENABLE_REMOTE_POPUP_ANNOUNCEMENTS=${ENABLE_REMOTE_POPUP_ANNOUNCEMENTS:-true}
+      - ENABLE_REMOTE_ADS=${ENABLE_REMOTE_ADS:-false}
+      - ENABLE_REMOTE_ANNOUNCEMENTS=${ENABLE_REMOTE_ANNOUNCEMENTS:-false}
+      - ENABLE_REMOTE_POPUP_ANNOUNCEMENTS=${ENABLE_REMOTE_POPUP_ANNOUNCEMENTS:-false}
       - BROWSER_HEADLESS=true
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - SQL_ECHO=${SQL_ECHO:-false}
       - TOKEN_CACHE_TTL_MIN_HOURS=${TOKEN_CACHE_TTL_MIN_HOURS:-5}
       - TOKEN_CACHE_TTL_MAX_HOURS=${TOKEN_CACHE_TTL_MAX_HOURS:-10}
       - TZ=Asia/Shanghai
+    # 方案A：允许容器访问宿主机的人工过滑块服务（http://host.docker.internal:8787）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - backend_web_logs:/app/backend-web/logs
       - static-files:/app/static
@@ -156,12 +159,18 @@ services:
       - TOKEN_CACHE_TTL_MIN_HOURS=${TOKEN_CACHE_TTL_MIN_HOURS:-5}
       - TOKEN_CACHE_TTL_MAX_HOURS=${TOKEN_CACHE_TTL_MAX_HOURS:-10}
       - TZ=Asia/Shanghai
+    # 方案A：允许容器访问宿主机的人工过滑块服务（http://host.docker.internal:8787）
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - websocket_logs:/app/websocket/logs
       - static-files:/app/static
       - browser_data:/app/browser_data
-    ports:
-      - "${WEBSOCKET_PORT:-8090}:8090"
+    # 不映射端口到宿主机，仅在 Docker 内网通信，防止 /internal 路由被外部访问
+    # ports:
+    #   - "${WEBSOCKET_PORT:-8090}:8090"
+    expose:
+      - "8090"
     networks:
       - xianyu-network
     depends_on:
@@ -211,8 +220,11 @@ services:
       - scheduler_logs:/app/scheduler/logs
       - static-files:/app/static:ro
       - backup-files:/app/backups
-    ports:
-      - "${SCHEDULER_PORT:-8091}:8091"
+    # 不映射端口到宿主机，仅在 Docker 内网通信
+    # ports:
+    #   - "${SCHEDULER_PORT:-8091}:8091"
+    expose:
+      - "8091"
     networks:
       - xianyu-network
     depends_on:
@@ -231,7 +243,7 @@ services:
       retries: 3
       start_period: 60s
 
-  # 前端服务
+# 前端服务
   frontend:
     build:
       context: .
@@ -247,6 +259,14 @@ services:
     depends_on:
       backend-web:
         condition: service_healthy
+    # 覆盖镜像内置的 wget --spider http://localhost:80/（该命令优先解析 IPv6 [::1]，
+    # 而 nginx 仅监听 IPv4，导致容器内健康自检永远失败被判 unhealthy）
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
 
 networks:
   xianyu-network:

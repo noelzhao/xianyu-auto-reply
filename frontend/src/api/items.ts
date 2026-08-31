@@ -122,8 +122,13 @@ export const batchOfflineItems = (cookieId: string, itemIds: string[]): Promise<
 }
 
 // 批量删除闲鱼平台商品（本地商品记录保留）
-export const batchDeleteXianyuItems = (cookieId: string, itemIds: string[]): Promise<ApiResponse> => {
-  return post(`${ITEM_PREFIX}/batch-delete-xianyu`, { cookie_id: cookieId, item_ids: itemIds })
+// config 可选：用于覆盖默认超时（批量删除为逐条串行，100 个可能耗时数分钟，需放宽 timeout）
+export const batchDeleteXianyuItems = (
+  cookieId: string,
+  itemIds: string[],
+  config?: Parameters<typeof post>[2]
+): Promise<ApiResponse> => {
+  return post(`${ITEM_PREFIX}/batch-delete-xianyu`, { cookie_id: cookieId, item_ids: itemIds }, config)
 }
 
 // 从账号获取商品（分页）

@@ -16,12 +16,15 @@ from common.services.captcha.slider_mode import is_real_mouse_slider_mode
 
 
 def _has_x5sec(cookies: Optional[Dict[str, str]]) -> bool:
-    """判断 cookie 字典中是否包含 x5/x5sec 相关 cookie（与上层放行判定一致）。"""
+    """判断 cookie 字典中是否包含 x5sec cookie（真正放行的标志）。
+
+    必须精确匹配 cookie 名 x5sec；x5sectag、x5secdata 等不是放行标志
+    （与主引擎 slider_stealth 的 _get_cookies_after_success 语义一致）。
+    """
     if not cookies:
         return False
     for name in cookies:
-        name_lower = str(name).lower()
-        if name_lower.startswith("x5") or "x5sec" in name_lower:
+        if str(name).lower() == "x5sec":
             return True
     return False
 

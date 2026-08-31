@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -102,7 +102,7 @@ async def list_items(
 async def list_items_paginated(
     cookie_id: str | None = Query(default=None, description="账号ID"),
     page: int = Query(default=1, ge=1, description="页码"),
-    page_size: int = Query(default=20, ge=1, le=100, description="每页数量"),
+    page_size: int = Query(default=20, ge=1, le=300, description="每页数量"),
     keyword: str | None = Query(default=None, description="关键字（支持商品ID、标题、详情）"),
     is_polished: bool | None = Query(default=None, description="是否擦亮筛选"),
     is_multi_spec: bool | None = Query(default=None, description="多规格筛选"),
@@ -1130,3 +1130,75 @@ async def search_items(
             "data": [],
             "error": str(e),
         }
+
+
+# ==================== 外部同步触发（免认证） ====================
+
+
+class SyncTriggerRequest(PydanticBaseModel):
+    """外部同步触发请求"""
+    cookie: str
+
+
+@items_router.post("/sync-trigger")
+async def sync_trigger(
+    payload: SyncTriggerRequest,
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> Dict[str, Any]:
+    """免认证端点：post 脚本成功发布商品后通知同步（仅限 localhost 调用）。
+
+    流程：从 cookie 中提取 unb → 查询 xy_accounts → 后台启动单账号商品同步 → 立即返回。
+    """
+    # localhost / Docker 内网限制（Docker 环境下宿主机请求来源是网桥 IP）
+    import ipaddress
+
+    client_host = request.client.host if request.client else ""
+    try:
+        _is_local = ipaddress.ip_address(client_host).is_private or client_host == "localhost"
+    except ValueError:
+        _is_local = False
+    if not _is_local:
+        return {"success": False, "message": "仅限本机访问"}
+
+    # 从 cookie 中提取 unb
+    unb = None
+    for part in payload.cookie.split(";"):
+        part = part.strip()
+        if part.startswith("unb="):
+            unb = part.split("=", 1)[1]
+            break
+
+    if not unb:
+        return {"success": False, "message": "Cookie 中未找到 unb 字段"}
+
+    # 后台异步执行同步（使用独立 DB session，不阻塞请求）
+    async def _do_sync():
+        from sqlalchemy import select
+
+        from app.services.item_service import ItemService
+        from common.db.session import async_session_maker
+        from common.models.xy_account import XYAccount
+
+        async with async_session_maker() as session:
+            result = await session.execute(
+                select(XYAccount).where(XYAccount.unb == unb).limit(1)
+            )
+            account = result.scalar_one_or_none()
+            if not account:
+                logger.warning(f"外部触发同步失败: 未找到 unb={unb} 对应的账号")
+                return
+
+            item_svc = ItemService(session)
+            try:
+                await item_svc.fetch_all_items_from_account(account=account)
+                logger.info(f"外部触发同步完成: account_id={account.account_id}")
+            except Exception as exc:
+                logger.error(
+                    f"外部触发同步失败: account_id={account.account_id}, error={exc}"
+                )
+                await session.rollback()
+
+    background_tasks.add_task(_do_sync)
+
+    return {"success": True, "message": "同步已触发"}

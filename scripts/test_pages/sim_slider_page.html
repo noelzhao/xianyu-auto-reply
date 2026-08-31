@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>模拟闲鱼验证页</title></head>
+<body>
+<h1>模拟闲鱼滑块验证页（测试用）</h1>
+<p>3 秒后自动生成新的 x5sec cookie（模拟人工拖滑块验证通过），再 1 秒后自动关闭窗口（模拟闲鱼验证成功后的页面行为）。</p>
+<script>
+  setTimeout(function () {
+    document.cookie = "x5sec=NEW-VALUE-FROM-SIMULATED-SLIDE; path=/";
+    document.title = "验证通过";
+  }, 3000);
+  setTimeout(function () { window.close(); }, 4000);
+</script>
+</body>
+</html>

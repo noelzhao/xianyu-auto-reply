@@ -1,6 +1,6 @@
 ﻿import { useEffect, useState, useRef } from 'react'
 import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink } from 'lucide-react'
-import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams } from '@/api/items'
+import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams, type FetchItemsSummaryResponse } from '@/api/items'
 import { getAccountDetails } from '@/api/accounts'
 import { batchClearItemRelations } from '@/api/cards'
 import { ItemCardRelationModal } from './ItemCardRelationModal'
@@ -101,9 +101,26 @@ export function Items() {
   const [batchDeleteItemConfirm, setBatchDeleteItemConfirm] = useState(false)
   const [batchOfflineConfirm, setBatchOfflineConfirm] = useState(false)
   const [batchXianyuDeleteConfirm, setBatchXianyuDeleteConfirm] = useState(false)
-  const [offlining, setOfflining] = useState(false)
+const [offlining, setOfflining] = useState(false)
   const [deletingFromXianyu, setDeletingFromXianyu] = useState(false)
   const deletingFromXianyuRef = useRef(false)
+  // 删除所有商品弹窗状态（选账号 → 查询数量 → 确认 → 分批删除）
+  const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false)
+  const [deleteAllAccountId, setDeleteAllAccountId] = useState('')
+  const [deleteAllFetching, setDeleteAllFetching] = useState(false)
+  const [deleteAllPreview, setDeleteAllPreview] = useState<{
+    accountId: string
+    total: number
+    itemIds: string[]
+  } | null>(null)
+  const [deleteAllRunning, setDeleteAllRunning] = useState(false)
+  const deleteAllRunningRef = useRef(false)
+  const [deleteAllProgress, setDeleteAllProgress] = useState<{
+    done: number
+    total: number
+    success: number
+    fail: number
+  } | null>(null)
   const [deleteDefaultReplyConfirm, setDeleteDefaultReplyConfirm] = useState(false)
   const [batchDeleteDefaultReplyConfirm, setBatchDeleteDefaultReplyConfirm] = useState(false)
   const [deleteAiPromptConfirm, setDeleteAiPromptConfirm] = useState(false)
@@ -495,9 +512,165 @@ export function Items() {
     } catch {
       setBatchXianyuDeleteConfirm(false)
       addToast({ type: 'error', message: '删除闲鱼商品失败' })
-    } finally {
+} finally {
       deletingFromXianyuRef.current = false
       setDeletingFromXianyu(false)
+    }
+  }
+
+  // ==================== 删除某账号下所有闲鱼商品 ====================
+
+  const openDeleteAllModal = () => {
+    if (deleteAllRunningRef.current) return
+    // 默认预填顶部已选账号（若有），操作人员可重新选择
+    setDeleteAllAccountId(selectedAccount || '')
+    setDeleteAllPreview(null)
+    setDeleteAllModalOpen(true)
+  }
+
+  const closeDeleteAllModal = () => {
+    if (deleteAllFetching || deleteAllRunning) return
+    setDeleteAllModalOpen(false)
+    setDeleteAllAccountId('')
+    setDeleteAllPreview(null)
+  }
+
+  // 第一步：拉取所选账号全部商品，预览待删除数量
+  const handleDeleteAllFetchItems = async () => {
+    if (!deleteAllAccountId) {
+      addToast({ type: 'warning', message: '请先选择要删除的闲鱼账号' })
+      return
+    }
+    setDeleteAllFetching(true)
+    try {
+      const result = await fetchAllItemsFromAccount(deleteAllAccountId)
+      if (!result.success) {
+        addToast({ type: 'error', message: result.message || '获取该账号商品失败' })
+        return
+      }
+      const resp = result as FetchItemsSummaryResponse & {
+        skipped?: boolean
+        items?: { id?: string | number }[]
+      }
+      // 账号级同步锁被占用时 items 为空，需与"确实没有商品"区分开
+      if (resp.skipped) {
+        addToast({ type: 'warning', message: result.message || '该账号正在同步商品，请稍后重试' })
+        return
+      }
+      const itemIds = Array.from(
+        new Set(
+          (resp.items || [])
+            .map((fetched) => String(fetched.id ?? '').trim())
+            .filter(Boolean)
+        )
+      )
+      if (itemIds.length === 0) {
+        addToast({ type: 'warning', message: '该账号当前没有可删除的闲鱼商品' })
+        return
+      }
+      setDeleteAllPreview({ accountId: deleteAllAccountId, total: itemIds.length, itemIds })
+    } catch {
+      addToast({ type: 'error', message: '获取该账号商品失败，请检查账号是否在线' })
+    } finally {
+      setDeleteAllFetching(false)
+    }
+  }
+
+  // 第二步：确认后分批执行删除（后端单次上限 100 个，逐批串行）
+  const handleDeleteAllConfirm = async () => {
+    if (!deleteAllPreview || deleteAllRunningRef.current) return
+    deleteAllRunningRef.current = true
+    setDeleteAllRunning(true)
+    setDeleteAllProgress({ done: 0, total: 0, success: 0, fail: 0 })
+
+    const { accountId, itemIds } = deleteAllPreview
+    const BATCH_SIZE = 100
+    const chunks: string[][] = []
+    for (let i = 0; i < itemIds.length; i += BATCH_SIZE) {
+      chunks.push(itemIds.slice(i, i + BATCH_SIZE))
+    }
+
+    let successCount = 0
+    let failCount = 0
+    let cookieFailCount = 0
+    let stoppedBySession = false
+    const failures: { item_id: string; message: string }[] = []
+
+    try {
+      for (let idx = 0; idx < chunks.length; idx++) {
+        setDeleteAllProgress({
+          done: idx,
+          total: chunks.length,
+          success: successCount,
+          fail: failCount,
+        })
+        // 后端为逐条串行删除，100 个/批可能耗时数分钟，必须放宽超时（默认 90s 会中断）
+        const res = await batchDeleteXianyuItems(accountId, chunks[idx], {
+          timeout: 10 * 60 * 1000,
+        })
+        const data = res.data as
+          | {
+              results?: {
+                item_id: string
+                success: boolean
+                message?: string
+                cookie_saved?: boolean
+                cookie_message?: string
+                session_expired?: boolean
+              }[]
+            }
+          | undefined
+        const results = data?.results || []
+        for (const entry of results) {
+          if (entry.success) {
+            successCount++
+          } else {
+            failCount++
+            if (failures.length < 5) {
+              failures.push({ item_id: entry.item_id, message: entry.message || '删除失败' })
+            }
+          }
+          if (entry.cookie_saved === false) cookieFailCount++
+        }
+        // 账号 Session 过期时后端已停止本批后续删除，前端也应停止后续批次
+        if (results.some((entry) => entry.session_expired)) {
+          stoppedBySession = true
+          break
+        }
+      }
+
+      setDeleteAllProgress({
+        done: chunks.length,
+        total: chunks.length,
+        success: successCount,
+        fail: failCount,
+      })
+
+      const summaryParts = [`已删除 ${successCount} 个`]
+      if (failCount > 0) summaryParts.push(`失败 ${failCount} 个`)
+      if (stoppedBySession) summaryParts.push('该账号Session过期，已停止后续删除，请登录后重试')
+      if (cookieFailCount > 0) summaryParts.push(`Cookie写回异常 ${cookieFailCount} 个，请检查账号状态`)
+      addToast({
+        type: failCount > 0 || stoppedBySession ? 'warning' : 'success',
+        message: summaryParts.join('；'),
+      })
+      if (failures.length > 0) {
+        addToast({
+          type: 'error',
+          message: `失败示例：${failures.map((f) => `${f.item_id}: ${f.message}`).join('；')}`,
+        })
+      }
+
+      await loadItems()
+      setDeleteAllPreview(null)
+      setDeleteAllAccountId('')
+      setDeleteAllModalOpen(false)
+    } catch {
+      addToast({ type: 'error', message: '删除过程出现异常，请检查部分失败商品后重试' })
+    } finally {
+      deleteAllRunningRef.current = false
+      setDeleteAllRunning(false)
+      setDeleteAllProgress(null)
     }
   }
 
@@ -1155,6 +1328,18 @@ export function Items() {
               </button>
             </>
           )}
+<button
+            onClick={openDeleteAllModal}
+            disabled={deletingFromXianyu || deleteAllRunning}
+            className="btn-ios-danger btn-sm whitespace-nowrap"
+          >
+            {deleteAllRunning ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="w-3.5 h-3.5" />
+            )}
+            删除所有商品
+          </button>
           <button
             onClick={openBatchDefaultReplyModal}
             className="btn-ios-primary btn-sm whitespace-nowrap"
@@ -1539,6 +1724,7 @@ export function Items() {
                 <option value={20}>20</option>
                 <option value={50}>50</option>
                 <option value={100}>100</option>
+                <option value={300}>300</option>
               </select>
               <span>条，共 {pagination.total} 条</span>
             </div>
@@ -2499,12 +2685,126 @@ export function Items() {
         type="danger"
         loading={deletingFromXianyu}
         onConfirm={handleBatchXianyuDelete}
-        onCancel={() => {
+onCancel={() => {
           if (!deletingFromXianyuRef.current) {
             setBatchXianyuDeleteConfirm(false)
           }
         }}
       />
+
+      {/* 删除所有商品弹窗：选账号 → 查询数量 → 确认 → 分批删除 */}
+      {deleteAllModalOpen && (
+        <div className="modal-overlay" style={{ zIndex: 70 }}>
+          <div className="modal-content max-w-md">
+            <div className="modal-header flex items-center justify-between">
+              <div>
+                <h2 className="modal-title flex items-center gap-2">
+                  <Trash2 className="w-5 h-5 text-red-500" />
+                  删除所有商品
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  选择账号后，将删除该账号名下的全部闲鱼线上商品
+                </p>
+              </div>
+              <button
+                onClick={closeDeleteAllModal}
+                disabled={deleteAllFetching || deleteAllRunning}
+                className="modal-close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="modal-body space-y-4">
+              <div className="input-group">
+                <label className="input-label">选择闲鱼账号</label>
+                <Select
+                  value={deleteAllAccountId}
+                  onChange={setDeleteAllAccountId}
+                  options={accounts.map((account) => ({
+                    value: account.id,
+                    label: account.note ? `${account.id} (${account.note})` : account.id,
+                    key: account.pk?.toString() || account.id,
+                  }))}
+                  placeholder="请选择要删除的账号"
+                  disabled={deleteAllFetching || deleteAllRunning}
+                />
+              </div>
+
+              <div className="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 text-sm text-red-600 dark:text-red-400">
+                危险操作：执行后将<b>永久删除</b>该账号名下所有闲鱼平台商品，无法恢复。
+                本地商品记录与回复配置会保留。
+              </div>
+
+              {deleteAllPreview ? (
+                <div className="rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-3 text-sm text-blue-700 dark:text-blue-300">
+                  <div>
+                    账号「<b>{deleteAllPreview.accountId}</b>」当前共有
+                    <b> {deleteAllPreview.total} </b>个商品将被删除。
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      onClick={() => setDeleteAllPreview(null)}
+                      disabled={deleteAllRunning}
+                      className="btn-ios-secondary btn-sm whitespace-nowrap"
+                    >
+                      重新选择
+                    </button>
+                    <button
+                      onClick={handleDeleteAllConfirm}
+                      disabled={deleteAllRunning}
+                      className="btn-ios-danger btn-sm whitespace-nowrap"
+                    >
+                      {deleteAllRunning ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Trash2 className="w-3.5 h-3.5" />
+                      )}
+                      确认删除全部 {deleteAllPreview.total} 个商品
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={handleDeleteAllFetchItems}
+                  disabled={deleteAllFetching || !deleteAllAccountId}
+                  className="btn-ios-primary w-full"
+                >
+                  {deleteAllFetching ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Search className="w-4 h-4" />
+                  )}
+                  {deleteAllFetching ? '正在获取该账号商品...' : '查询该账号商品数量'}
+                </button>
+              )}
+
+              {/* 执行中进度反馈 */}
+              {deleteAllRunning && deleteAllProgress && (
+                <div className="rounded-lg bg-slate-100 dark:bg-slate-700 p-3 text-sm">
+                  <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    正在删除第 {Math.min(deleteAllProgress.done + 1, deleteAllProgress.total)}
+                    /{deleteAllProgress.total} 批，已删除 {deleteAllProgress.success} 个，
+                    失败 {deleteAllProgress.fail} 个
+                  </div>
+                  <div className="mt-2 h-1.5 bg-slate-300 dark:bg-slate-600 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-red-500 transition-all"
+                      style={{
+                        width: `${
+                          deleteAllProgress.total > 0
+                            ? (deleteAllProgress.done / deleteAllProgress.total) * 100
+                            : 0
+                        }%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
 
       {/* 删除默认回复确认弹窗 */}

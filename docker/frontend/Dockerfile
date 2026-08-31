@@ -8,14 +8,17 @@ FROM node:18-alpine AS builder
 
 # 配置国内镜像源
 RUN npm config set registry https://registry.npmmirror.com
+RUN npm config set fetch-retries 5
+RUN npm config set fetch-retry-mintimeout 20000
+RUN npm config set fetch-retry-maxtimeout 120000
 
 WORKDIR /app
 
 # 复制依赖文件
 COPY frontend/package.json frontend/package-lock.json ./
 
-# 使用锁文件进行确定性安装
-RUN npm ci --no-audit --no-fund
+# 使用 npm install（比 ci 更容错，支持网络重试）
+RUN npm install --no-audit --no-fund
 
 # 复制源代码
 COPY frontend/ .

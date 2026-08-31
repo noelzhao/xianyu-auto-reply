@@ -825,20 +825,19 @@ class CookieTokenManager:
                         except Exception as update_e:
                             logger.error(f"【{self.cookie_id}】更新风控日志失败: {update_e}")
 
-                    # 只提取x5sec相关的cookie值进行更新
+                    # 只提取 x5sec cookie 进行更新（精确匹配，不匹配 x5sectag 等）
                     updated_cookies = self.cookies.copy()
                     new_cookie_count = 0
                     updated_cookie_count = 0
                     x5sec_cookies = {}
 
                     for cookie_name, cookie_value in cookies.items():
-                        cookie_name_lower = cookie_name.lower()
-                        if cookie_name_lower.startswith('x5') or 'x5sec' in cookie_name_lower:
+                        if cookie_name.lower() == 'x5sec':
                             x5sec_cookies[cookie_name] = cookie_value
 
-                    logger.info(f"【{self.cookie_id}】找到{len(x5sec_cookies)}个x5相关cookies")
+                    logger.info(f"【{self.cookie_id}】找到{len(x5sec_cookies)}个x5sec cookies")
 
-                    # 滑块视觉验证通过但未下发任何 x5* cookie：服务端实际并未放行（典型场景为
+                    # 滑块视觉验证通过但未下发 x5sec cookie：服务端实际并未放行（典型场景为
                     # 浏览器/HTTP 出口 IP 不一致或风控环境异常）。若仍按"成功"返回 cookies_str，
                     # 上层 refresh_token 会认为滑块成功并立即重试 token 刷新，但 cookies 实际未变，
                     # token 接口必然再次返回 FAIL_SYS_USER_VALIDATE → 又触发滑块，形成死循环。
@@ -1165,6 +1164,15 @@ class CookieTokenManager:
                 )
                 notification_sent = True
                 self.last_token_refresh_status = "failed_captcha_max_retries"
+                # 飞书通知：需要手动更新 Cookie
+                try:
+                    from common.services.feishu_notify import notify_cookie_update_needed
+                    await notify_cookie_update_needed(
+                        self.cookie_id,
+                        f"滑块验证重试 {self.max_captcha_verification_count} 次均失败"
+                    )
+                except Exception as feishu_e:
+                    logger.debug(f"飞书通知发送失败: {feishu_e}")
                 return None
 
             # 检查消息接收冷却时间
@@ -1246,6 +1254,12 @@ class CookieTokenManager:
                     await self._reconnect_websocket_for_renewed_token(
                         reason="Token刷新后已变化"
                     )
+                # 飞书通知：账号已恢复
+                try:
+                    from common.services.feishu_notify import notify_account_recovered
+                    await notify_account_recovered(self.cookie_id)
+                except Exception as feishu_e:
+                    logger.debug(f"飞书恢复通知发送失败: {feishu_e}")
                 return new_token
 
             # Session过期先于滑块判断：Cookie 已失效时滑块验证结果同样无效，
@@ -1327,6 +1341,15 @@ class CookieTokenManager:
                     self.last_token_refresh_status = "failed_captcha"
                     self.current_token = None
                     await self._delete_cached_token()
+                    # 飞书通知：需要手动更新 Cookie
+                    try:
+                        from common.services.feishu_notify import notify_cookie_update_needed
+                        await notify_cookie_update_needed(
+                            self.cookie_id,
+                            "滑块验证失败，未获取到 x5sec cookie"
+                        )
+                    except Exception as feishu_e:
+                        logger.debug(f"飞书通知发送失败: {feishu_e}")
                     return None
                 except Exception as captcha_e:
                     logger.error(f"【{self.cookie_id}】滑块验证处理异常: {self._safe_str(captcha_e)}")

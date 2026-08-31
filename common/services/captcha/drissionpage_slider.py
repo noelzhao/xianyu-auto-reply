@@ -219,14 +219,32 @@ class DrissionPageSliderService:
         logger.info(f"【{self.pure_user_id}】已注入 {len(cookies_dict)} 个 cookie")
 
     def get_cookies_dict(self) -> Dict[str, str]:
-        """从浏览器导出当前全部 cookie 为字典。"""
+        """从浏览器导出当前全部 cookie 为字典。
+
+        尝试获取所有域名的 cookie（DrissionPage 3.x 通过 all_domains 参数支持）。
+        x5sec cookie 可能设置在 .goofish.com 或 .taobao.com 等域上，
+        仅取当前页面域名会遗漏。
+        """
         result: Dict[str, str] = {}
         try:
-            for cookie in self.page.cookies():
+            # 尝试获取所有域名的 cookie
+            try:
+                cookies_iter = self.page.cookies(all_domains=True)
+            except TypeError:
+                # DrissionPage 版本不支持 all_domains 参数，退回默认
+                cookies_iter = self.page.cookies()
+            for cookie in cookies_iter:
                 if isinstance(cookie, dict) and "name" in cookie and "value" in cookie:
                     result[cookie["name"]] = cookie["value"]
         except Exception as e:
             logger.warning(f"【{self.pure_user_id}】导出 cookie 失败: {e}")
+            # 退回基础方式
+            try:
+                for cookie in self.page.cookies():
+                    if isinstance(cookie, dict) and "name" in cookie and "value" in cookie:
+                        result[cookie["name"]] = cookie["value"]
+            except Exception:
+                pass
         return result
 
     # ==================== 滑块处理 ====================
@@ -240,19 +258,44 @@ class DrissionPageSliderService:
 
     @staticmethod
     def _has_x5sec(cookies: Optional[Dict[str, str]]) -> bool:
-        """判断 cookie 字典中是否包含 x5sec（真正放行的标志，与上层放行判定一致）。
+        """判断 cookie 字典中是否包含 x5sec（真正放行的标志）。
 
         滑块通过的唯一可靠标志是阿里 baxia 下发的 x5sec cookie；仅凭页面标题
         判断会误判（链接过期页 / punish 页 / 空白页 / 网络错误页标题都不等于
         "验证码拦截"，却并未真正通过）。
+
+        注意：必须精确匹配 cookie 名 x5sec，不能匹配 x5sectag、x5secdata 等
+        ——这些是验证未通过的信号，不是放行标志（与主引擎 slider_stealth 一致）。
         """
         if not cookies:
             return False
         for name in cookies:
-            name_lower = str(name).lower()
-            if name_lower.startswith("x5") or "x5sec" in name_lower:
+            if str(name).lower() == "x5sec":
                 return True
         return False
+
+    def _wait_for_x5sec(self, max_wait: float = 6.0) -> Dict[str, str]:
+        """滑块视觉通过后轮询等待 x5sec cookie 被异步写入。
+
+        阿里 baxia 的 x5sec cookie 常经 Service Worker 异步写入，主引擎
+        (slider_stealth) 也等待数秒。此处每 0.5 秒轮询一次，直到 x5sec
+        出现或超时。
+
+        Returns:
+            最终获取到的 cookies 字典（可能含或不含 x5sec）
+        """
+        deadline = time.time() + max_wait
+        cookies = self.get_cookies_dict()
+        if self._has_x5sec(cookies):
+            return cookies
+        while time.time() < deadline:
+            time.sleep(0.5)
+            cookies = self.get_cookies_dict()
+            if self._has_x5sec(cookies):
+                logger.info(f"【{self.pure_user_id}】x5sec cookie 在等待后出现")
+                return cookies
+        logger.info(f"【{self.pure_user_id}】等待 {max_wait:.1f}s 后仍未检测到 x5sec")
+        return cookies
 
     def _calculate_slide_distance(self) -> int:
         """动态计算滑动距离（委托 drissionpage_motion）。"""
@@ -349,7 +392,10 @@ class DrissionPageSliderService:
                     self._slide()
 
                     if not self._detect_blocked():
-                        cookies = self.get_cookies_dict()
+                        # 滑块视觉通过后，x5sec cookie 可能经 Service Worker
+                        # 异步写入（主引擎 verification_checker 也等待数秒）。
+                        # 此处轮询等待，而非立即读取。
+                        cookies = self._wait_for_x5sec(max_wait=6.0)
                         if self._has_x5sec(cookies):
                             duration = time.time() - start_time
                             logger.info(
@@ -358,9 +404,19 @@ class DrissionPageSliderService:
                             )
                             return True, cookies
                         # 标题已非拦截页但仍未拿到 x5sec：尚未真正通过，继续重试
+                        # 记录调试信息：页面标题、URL、cookie 名称列表
+                        try:
+                            page_title = self.page.title
+                            page_url = str(self.page.url)[:200]
+                            cookie_names = list(cookies.keys()) if cookies else []
+                        except Exception:
+                            page_title = "<读取失败>"
+                            page_url = "<读取失败>"
+                            cookie_names = []
                         logger.warning(
                             f"【{self.pure_user_id}】第 {attempt + 1} 次滑动后未检测到 x5sec，"
-                            f"判定为未通过，继续重试"
+                            f"判定为未通过，继续重试 | 标题: {page_title} | "
+                            f"URL: {page_url} | cookie名: {cookie_names}"
                         )
                     else:
                         logger.warning(
