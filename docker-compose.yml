@@ -218,7 +218,7 @@ services:
       - TZ=Asia/Shanghai
     volumes:
       - scheduler_logs:/app/scheduler/logs
-      - static-files:/app/static:ro
+      - static-files:/app/static
       - backup-files:/app/backups
     # 不映射端口到宿主机，仅在 Docker 内网通信
     # ports:
