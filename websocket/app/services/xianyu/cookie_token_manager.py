@@ -1280,6 +1280,16 @@ class CookieTokenManager:
                     except Exception as disable_e:
                         logger.error(f"【{self.cookie_id}】自动禁用账号失败: {self._safe_str(disable_e)}")
 
+                    # 飞书通知：Session过期且未配置密码，需要手动更新Cookie
+                    try:
+                        from common.services.feishu_notify import notify_cookie_update_needed
+                        await notify_cookie_update_needed(
+                            self.cookie_id,
+                            "Session过期且未配置账号密码，需手动更新Cookie"
+                        )
+                    except Exception as feishu_e:
+                        logger.debug(f"飞书通知发送失败: {feishu_e}")
+
                     notification_sent = True
                     return None
                 if refresh_result is True:
@@ -1295,6 +1305,15 @@ class CookieTokenManager:
                     self.last_token_refresh_status = "skipped_cooldown"
                     self.current_token = None
                     await self._delete_cached_token()
+                    # 飞书通知：Session过期，密码登录冷却中，需要手动更新Cookie
+                    try:
+                        from common.services.feishu_notify import notify_cookie_update_needed
+                        await notify_cookie_update_needed(
+                            self.cookie_id,
+                            "Session过期，密码登录冷却中，需手动更新Cookie"
+                        )
+                    except Exception as feishu_e:
+                        logger.debug(f"飞书通知发送失败: {feishu_e}")
                     return None
 
                 # 刷新失败（密码登录真实失败：账号信息缺失等）
@@ -1302,6 +1321,15 @@ class CookieTokenManager:
                 self.last_token_refresh_status = "failed_session_expired"
                 self.current_token = None
                 await self._delete_cached_token()
+                # 飞书通知：Session过期，密码登录刷新失败，需要手动更新Cookie
+                try:
+                    from common.services.feishu_notify import notify_cookie_update_needed
+                    await notify_cookie_update_needed(
+                        self.cookie_id,
+                        "Session过期，密码登录刷新失败，需手动更新Cookie"
+                    )
+                except Exception as feishu_e:
+                    logger.debug(f"飞书通知发送失败: {feishu_e}")
                 return None
 
             # 检查是否需要滑块验证

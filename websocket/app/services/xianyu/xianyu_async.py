@@ -2916,14 +2916,46 @@ class XianyuAsync:
                                     continue
                                 elif result == "no_credentials":
                                     logger.warning(f"【{self.cookie_id}】未配置密码，无法自动登录")
+                                    try:
+                                        from common.services.feishu_notify import notify_cookie_update_needed
+                                        await notify_cookie_update_needed(
+                                            self.cookie_id,
+                                            "认证连续失败且未配置密码，需手动更新Cookie"
+                                        )
+                                    except Exception as feishu_e:
+                                        logger.debug(f"飞书通知发送失败: {feishu_e}")
                                 elif result == "skipped_cooldown":
                                     logger.warning(f"【{self.cookie_id}】密码登录冷却期内，跳过本次刷新")
+                                    try:
+                                        from common.services.feishu_notify import notify_cookie_update_needed
+                                        await notify_cookie_update_needed(
+                                            self.cookie_id,
+                                            "认证连续失败，密码登录冷却中，需手动更新Cookie"
+                                        )
+                                    except Exception as feishu_e:
+                                        logger.debug(f"飞书通知发送失败: {feishu_e}")
                                 else:
                                     logger.error(f"【{self.cookie_id}】密码登录失败")
+                                    try:
+                                        from common.services.feishu_notify import notify_cookie_update_needed
+                                        await notify_cookie_update_needed(
+                                            self.cookie_id,
+                                            "认证连续失败，密码登录失败，需手动更新Cookie"
+                                        )
+                                    except Exception as feishu_e:
+                                        logger.debug(f"飞书通知发送失败: {feishu_e}")
                             else:
                                 logger.warning(f"【{self.cookie_id}】CookieTokenManager未初始化")
                         except Exception as e:
                             logger.error(f"【{self.cookie_id}】密码登录异常: {e}")
+                            try:
+                                from common.services.feishu_notify import notify_cookie_update_needed
+                                await notify_cookie_update_needed(
+                                    self.cookie_id,
+                                    "认证连续失败，密码登录异常，需手动更新Cookie"
+                                )
+                            except Exception as feishu_e:
+                                logger.debug(f"飞书通知发送失败: {feishu_e}")
                         
                         break
                     
