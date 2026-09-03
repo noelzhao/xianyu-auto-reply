@@ -1,6 +1,6 @@
 ﻿import { useEffect, useState, useRef } from 'react'
 import { CheckSquare, Download, Edit2, ExternalLink, Loader2, Package, PackageX, RefreshCw, Search, Square, Trash2, X, Settings, Plus, MessageSquare, Bot, ChevronLeft, ChevronRight, ImagePlus, Unlink, Tag } from 'lucide-react'
-import { batchDeleteItems, batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, updateItemPrice, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams, type FetchItemsSummaryResponse } from '@/api/items'
+import { batchDeleteXianyuItems, batchOfflineItems, deleteItem, fetchAllItemsFromAccessibleAccounts, fetchAllItemsFromAccount, getItemsPaginated, updateItem, updateItemMultiQuantityDelivery, updateItemMultiSpec, updateItemPrice, getItemDefaultReply, saveItemDefaultReply, deleteItemDefaultReply, batchSaveItemDefaultReply, batchDeleteItemDefaultReply, getItemAiPrompt, saveItemAiPrompt, batchDeleteItemAiPrompt, batchSaveItemAiPrompt, uploadItemDefaultReplyImage, uploadBatchDefaultReplyImage, type ItemFilterParams, type FetchItemsSummaryResponse } from '@/api/items'
 import { getAccountDetails } from '@/api/accounts'
 import { batchClearItemRelations } from '@/api/cards'
 import { ItemCardRelationModal } from './ItemCardRelationModal'
@@ -118,10 +118,7 @@ export function Items() {
   const [deleteItemConfirm, setDeleteItemConfirm] = useState<{ open: boolean; item: Item | null }>({ open: false, item: null })
   const [batchDeleteItemConfirm, setBatchDeleteItemConfirm] = useState(false)
   const [batchOfflineConfirm, setBatchOfflineConfirm] = useState(false)
-  const [batchXianyuDeleteConfirm, setBatchXianyuDeleteConfirm] = useState(false)
-const [offlining, setOfflining] = useState(false)
-  const [deletingFromXianyu, setDeletingFromXianyu] = useState(false)
-  const deletingFromXianyuRef = useRef(false)
+ const [offlining, setOfflining] = useState(false)
   // 删除所有商品弹窗状态（选账号 → 查询数量 → 确认 → 分批删除）
   const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false)
   const [deleteAllAccountId, setDeleteAllAccountId] = useState('')
@@ -145,6 +142,20 @@ const [offlining, setOfflining] = useState(false)
   const [batchDeleteAiPromptConfirm, setBatchDeleteAiPromptConfirm] = useState(false)
   const [batchClearCardRelationsConfirm, setBatchClearCardRelationsConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const batchDeleteRef = useRef(false)
+  const [batchDeleteProgress, setBatchDeleteProgress] = useState<{
+    done: number
+    total: number
+    success: number
+    fail: number
+  } | null>(null)
+  const [batchDeleteResult, setBatchDeleteResult] = useState<{
+    success: number
+    fail: number
+    cookieFail: number
+    stoppedBySession: boolean
+    failures: { item_id: string; message: string }[]
+  } | null>(null)
   // const hasSearchEffectInitializedRef = useRef(false)  // 已改为手动查询，不再需要
   const skipNextSearchEffectRef = useRef(false)
 
@@ -359,32 +370,145 @@ const [offlining, setOfflining] = useState(false)
   }
 
   const handleBatchDelete = async () => {
+    if (batchDeleteRef.current) return
     if (selectedIds.size === 0) {
       addToast({ type: 'warning', message: '请先选择要删除的商品' })
       return
     }
-    setDeleting(true)
-    try {
-      // 将选中的 ID 转换为 { cookie_id, item_id } 格式
-      const itemsToDelete = items
-        .filter((item) => selectedIds.has(item.id))
-        .map((item) => ({ cookie_id: item.cookie_id, item_id: item.item_id }))
-      const result = await batchDeleteItems(itemsToDelete)
-      if (result.success) {
-        addToast({ type: 'success', message: result.message || `成功删除 ${selectedIds.size} 个商品` })
-        setSelectedIds(new Set())
-        setBatchDeleteItemConfirm(false)
-        loadItems()
-      } else {
-        setBatchDeleteItemConfirm(false)
-        addToast({ type: 'error', message: result.message || '删除失败' })
-      }
-    } catch {
-      setBatchDeleteItemConfirm(false)
-      addToast({ type: 'error', message: '批量删除失败' })
-    } finally {
-      setDeleting(false)
+    if (!selectedAccount) {
+      addToast({ type: 'warning', message: '请先在顶部「筛选账号」选择具体账号' })
+      return
     }
+    const selectedItems = items.filter((item) => selectedIds.has(item.id))
+    if (selectedItems.length !== selectedIds.size) {
+      addToast({ type: 'warning', message: '部分选中商品不在当前列表，请重新勾选' })
+      return
+    }
+    if (selectedItems.some((item) => item.cookie_id !== selectedAccount)) {
+      addToast({ type: 'warning', message: '选中商品包含其他账号，请重新勾选' })
+      return
+    }
+    const itemIds = selectedItems.map((item) => item.item_id)
+    if (itemIds.length === 0) {
+      addToast({ type: 'warning', message: '未找到可删除的闲鱼商品' })
+      return
+    }
+
+    batchDeleteRef.current = true
+    setDeleting(true)
+    setBatchDeleteResult(null)
+    setBatchDeleteProgress({ done: 0, total: 0, success: 0, fail: 0 })
+    try {
+      const BATCH_SIZE = 100
+      const chunks: string[][] = []
+      for (let i = 0; i < itemIds.length; i += BATCH_SIZE) {
+        chunks.push(itemIds.slice(i, i + BATCH_SIZE))
+      }
+
+      let successCount = 0
+      let failCount = 0
+      let cookieFailCount = 0
+      let stoppedBySession = false
+      const failures: { item_id: string; message: string }[] = []
+
+      setBatchDeleteProgress({
+        done: 0,
+        total: chunks.length,
+        success: 0,
+        fail: 0,
+      })
+
+      for (let idx = 0; idx < chunks.length; idx++) {
+        const res = await batchDeleteXianyuItems(selectedAccount, chunks[idx], {
+          timeout: 10 * 60 * 1000,
+        })
+        const data = res.data as
+          | {
+              results?: {
+                item_id: string
+                success: boolean
+                message?: string
+                cookie_saved?: boolean
+                cookie_message?: string
+                session_expired?: boolean
+              }[]
+            }
+          | undefined
+        const results = data?.results || []
+        for (const entry of results) {
+          if (entry.success) {
+            successCount++
+          } else {
+            failCount++
+            if (failures.length < 5) {
+              failures.push({ item_id: entry.item_id, message: entry.message || '删除失败' })
+            }
+          }
+          if (entry.cookie_saved === false) cookieFailCount++
+        }
+        setBatchDeleteProgress({
+          done: idx + 1,
+          total: chunks.length,
+          success: successCount,
+          fail: failCount,
+        })
+        if (results.some((entry) => entry.session_expired)) {
+          stoppedBySession = true
+          break
+        }
+      }
+
+      setBatchDeleteResult({
+        success: successCount,
+        fail: failCount,
+        cookieFail: cookieFailCount,
+        stoppedBySession,
+        failures,
+      })
+      if (stoppedBySession) {
+        addToast({
+          type: 'error',
+          message: `账号Session已过期，已停止后续删除。成功 ${successCount} 个，失败 ${failCount} 个。`,
+        })
+      } else if (failCount > 0 || cookieFailCount > 0) {
+        const preview = failures
+          .slice(0, 3)
+          .map((entry) => `${entry.item_id}：${entry.message}`)
+          .join('；')
+        const suffix = failures.length > 3 ? `；另有 ${failures.length - 3} 个失败` : ''
+        const cookieWarning =
+          cookieFailCount > 0
+            ? `；Cookie写回失败 ${cookieFailCount} 个`
+            : ''
+        addToast({
+          type: 'warning',
+          message: `删除完成：成功 ${successCount} 个，失败 ${failCount} 个。${preview}${suffix}${cookieWarning}`,
+        })
+      } else {
+        addToast({ type: 'success', message: `成功删除 ${successCount} 个闲鱼商品（线上+本地记录）` })
+      }
+      setSelectedIds(new Set())
+      loadItems()
+    } catch {
+      setBatchDeleteResult({
+        success: 0,
+        fail: 0,
+        cookieFail: 0,
+        stoppedBySession: false,
+        failures: [],
+      })
+      addToast({ type: 'error', message: '删除闲鱼商品失败' })
+    } finally {
+      batchDeleteRef.current = false
+      setDeleting(false)
+      setBatchDeleteProgress(null)
+    }
+  }
+
+  const closeBatchDeleteModal = () => {
+    if (batchDeleteRef.current) return
+    setBatchDeleteItemConfirm(false)
+    setBatchDeleteResult(null)
   }
 
   // ==================== 批量下架 ====================
@@ -444,97 +568,6 @@ const [offlining, setOfflining] = useState(false)
       addToast({ type: 'error', message: '批量下架失败' })
     } finally {
       setOfflining(false)
-    }
-  }
-
-  // ==================== 批量删除闲鱼平台商品 ====================
-
-  const selectedXianyuItems = items.filter((item) => selectedIds.has(item.id))
-
-  const openBatchXianyuDelete = () => {
-    if (deletingFromXianyuRef.current) return
-    if (selectedIds.size === 0) {
-      addToast({ type: 'warning', message: '请先选择要删除的闲鱼商品' })
-      return
-    }
-    if (!selectedAccount) {
-      addToast({ type: 'warning', message: '请先在顶部「筛选账号」选择具体账号' })
-      return
-    }
-    if (selectedXianyuItems.length !== selectedIds.size) {
-      addToast({ type: 'warning', message: '部分选中商品不在当前列表，请重新勾选' })
-      return
-    }
-    if (selectedXianyuItems.some((item) => item.cookie_id !== selectedAccount)) {
-      addToast({ type: 'warning', message: '选中商品包含其他账号，请重新勾选' })
-      return
-    }
-    setBatchXianyuDeleteConfirm(true)
-  }
-
-  const handleBatchXianyuDelete = async () => {
-    if (deletingFromXianyuRef.current) return
-    const itemIds = selectedXianyuItems.map((item) => item.item_id)
-    if (!selectedAccount || itemIds.length === 0) {
-      addToast({ type: 'warning', message: '未找到可删除的闲鱼商品' })
-      setBatchXianyuDeleteConfirm(false)
-      return
-    }
-
-    deletingFromXianyuRef.current = true
-    setDeletingFromXianyu(true)
-    try {
-      const result = await batchDeleteXianyuItems(selectedAccount, itemIds)
-      const data = result.data as
-        | {
-            results?: {
-              item_id: string
-              success: boolean
-              message?: string
-              cookie_saved?: boolean
-              cookie_message?: string
-            }[]
-            fail_count?: number
-          }
-        | undefined
-      const failedResults = (data?.results || []).filter((entry) => !entry.success)
-      const cookieFailures = (data?.results || []).filter(
-        (entry) => entry.cookie_saved === false,
-      )
-      if (result.success) {
-        if (failedResults.length > 0 || cookieFailures.length > 0) {
-          const preview = failedResults
-            .slice(0, 3)
-            .map((entry) => `${entry.item_id}：${entry.message || '删除失败'}`)
-            .join('；')
-          const suffix = failedResults.length > 3 ? `；另有 ${failedResults.length - 3} 个失败` : ''
-          const cookieWarning = cookieFailures.length > 0
-            ? `；Cookie写回失败 ${cookieFailures.length} 个：${cookieFailures[0].cookie_message || '具体原因未知'}`
-            : ''
-          addToast({
-            type: 'warning',
-            message: `${result.message || '删除完成'}${preview ? `；${preview}${suffix}` : ''}${cookieWarning}`,
-          })
-        } else {
-          addToast({ type: 'success', message: result.message || '闲鱼商品删除成功' })
-        }
-        setSelectedIds(new Set())
-        // 平台删除成功的商品已同步删除本地库记录，刷新列表移除这些商品
-        loadItems()
-      } else {
-        const firstFailure = failedResults[0]
-        addToast({
-          type: 'error',
-          message: firstFailure?.message || result.message || '删除闲鱼商品失败',
-        })
-      }
-      setBatchXianyuDeleteConfirm(false)
-    } catch {
-      setBatchXianyuDeleteConfirm(false)
-      addToast({ type: 'error', message: '删除闲鱼商品失败' })
-} finally {
-      deletingFromXianyuRef.current = false
-      setDeletingFromXianyu(false)
     }
   }
 
@@ -1406,14 +1439,6 @@ const [offlining, setOfflining] = useState(false)
                 <Trash2 className="w-3.5 h-3.5" />
                 删除选中 ({selectedIds.size})
               </button>
-              <button
-                onClick={openBatchXianyuDelete}
-                disabled={deletingFromXianyu}
-                className="btn-ios-danger btn-sm whitespace-nowrap"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                删除闲鱼商品 ({selectedIds.size})
-              </button>
               <button onClick={openBatchOffline} className="btn-ios-secondary btn-sm whitespace-nowrap">
                 <PackageX className="w-3.5 h-3.5" />
                 下架选中 ({selectedIds.size})
@@ -1434,7 +1459,7 @@ const [offlining, setOfflining] = useState(false)
           )}
 <button
             onClick={openDeleteAllModal}
-            disabled={deletingFromXianyu || deleteAllRunning}
+            disabled={deleting || deleteAllRunning}
             className="btn-ios-danger btn-sm whitespace-nowrap"
           >
             {deleteAllRunning ? (
@@ -3008,18 +3033,109 @@ const [offlining, setOfflining] = useState(false)
         onCancel={() => setDeleteItemConfirm({ open: false, item: null })}
       />
 
-      {/* 批量删除商品确认弹窗 */}
-      <ConfirmModal
-        isOpen={batchDeleteItemConfirm}
-        title="批量删除确认"
-        message={`确定要删除选中的 ${selectedIds.size} 个商品吗？删除后无法恢复。`}
-        confirmText="删除"
-        cancelText="取消"
-        type="danger"
-        loading={deleting}
-        onConfirm={handleBatchDelete}
-        onCancel={() => setBatchDeleteItemConfirm(false)}
-      />
+      {/* 批量删除商品确认弹窗（含进度条） */}
+      {batchDeleteItemConfirm && (
+        <div className="modal-overlay" style={{ zIndex: 70 }}>
+          <div className="modal-content max-w-md">
+            <div className="modal-header flex items-center justify-between">
+              <div>
+                <h2 className="modal-title flex items-center gap-2">
+                  <Trash2 className="w-5 h-5 text-red-500" />
+                  批量删除确认
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  将同时删除对应的闲鱼线上商品和本地记录
+                </p>
+              </div>
+              <button
+                onClick={closeBatchDeleteModal}
+                disabled={batchDeleteRef.current}
+                className="modal-close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="modal-body space-y-4">
+              <div className="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 text-sm text-red-600 dark:text-red-400">
+                确定要删除选中的 <b>{selectedIds.size}</b> 个商品吗？将同时删除对应的闲鱼线上商品和本地记录，操作不可恢复。
+              </div>
+
+              {/* 执行中进度反馈 */}
+              {deleting && batchDeleteProgress && (
+                <div className="rounded-lg bg-slate-100 dark:bg-slate-700 p-3 text-sm">
+                  <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    正在删除第 {Math.min(batchDeleteProgress.done + 1, batchDeleteProgress.total)}
+                    /{batchDeleteProgress.total} 批，已删除 {batchDeleteProgress.success} 个，
+                    失败 {batchDeleteProgress.fail} 个
+                  </div>
+                  <div className="mt-2 h-1.5 bg-slate-300 dark:bg-slate-600 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-red-500 transition-all"
+                      style={{
+                        width: `${
+                          batchDeleteProgress.total > 0
+                            ? (batchDeleteProgress.done / batchDeleteProgress.total) * 100
+                            : 0
+                        }%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* 删除完成结果展示 */}
+              {batchDeleteResult && !deleting && (
+                <div className={`rounded-lg p-3 text-sm ${
+                  batchDeleteResult.fail === 0 && !batchDeleteResult.stoppedBySession
+                    ? 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'
+                    : 'bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400'
+                }`}>
+                  {batchDeleteResult.stoppedBySession ? (
+                    <div>
+                      账号 Session 已过期，已停止后续删除。
+                      成功 <b>{batchDeleteResult.success}</b> 个，失败 <b>{batchDeleteResult.fail}</b> 个。
+                    </div>
+                  ) : batchDeleteResult.fail > 0 || batchDeleteResult.cookieFail > 0 ? (
+                    <div>
+                      删除完成：成功 <b>{batchDeleteResult.success}</b> 个，失败 <b>{batchDeleteResult.fail}</b> 个。
+                      {batchDeleteResult.cookieFail > 0 && ` Cookie写回失败 ${batchDeleteResult.cookieFail} 个。`}
+                      {batchDeleteResult.failures.length > 0 && (
+                        <div className="mt-1 text-xs">
+                          {batchDeleteResult.failures.slice(0, 3).map((f) => `${f.item_id}：${f.message}`).join('；')}
+                          {batchDeleteResult.failures.length > 3 ? `；另有 ${batchDeleteResult.failures.length - 3} 个失败` : ''}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div>成功删除 <b>{batchDeleteResult.success}</b> 个闲鱼商品（线上+本地记录）。</div>
+                  )}
+                </div>
+              )}
+
+              {/* 按钮区 */}
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={closeBatchDeleteModal}
+                  disabled={batchDeleteRef.current}
+                  className="btn-ios-secondary"
+                >
+                  {batchDeleteResult && !deleting ? '关闭' : '取消'}
+                </button>
+                {!deleting && !batchDeleteResult && (
+                  <button
+                    onClick={handleBatchDelete}
+                    className="btn-ios-danger"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    删除
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 批量下架确认弹窗 */}
       <ConfirmModal
@@ -3032,23 +3148,6 @@ const [offlining, setOfflining] = useState(false)
         loading={offlining}
         onConfirm={handleBatchOffline}
         onCancel={() => setBatchOfflineConfirm(false)}
-      />
-
-      {/* 批量删除闲鱼平台商品确认弹窗 */}
-      <ConfirmModal
-        isOpen={batchXianyuDeleteConfirm}
-        title="删除闲鱼商品确认"
-        message={`确定要用账号「${selectedAccount}」删除选中的 ${selectedXianyuItems.length} 个闲鱼平台商品吗？平台删除后无法恢复，本地商品记录和配置会保留。`}
-        confirmText="删除闲鱼商品"
-        cancelText="取消"
-        type="danger"
-        loading={deletingFromXianyu}
-        onConfirm={handleBatchXianyuDelete}
-onCancel={() => {
-          if (!deletingFromXianyuRef.current) {
-            setBatchXianyuDeleteConfirm(false)
-          }
-        }}
       />
 
       {/* 删除所有商品弹窗：选账号 → 查询数量 → 确认 → 分批删除 */}
