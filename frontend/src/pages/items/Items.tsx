@@ -29,7 +29,7 @@ export function Items() {
   // 分页状态
   const [pagination, setPagination] = useState({
     page: 1,
-    pageSize: 20,
+    pageSize: 300,
     total: 0,
     totalPages: 0,
   })
